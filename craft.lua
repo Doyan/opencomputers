@@ -19,16 +19,7 @@ if #arg < 1 or option.h then
   return
 end
 
-local side = false
-
-if #arg == 1 then
-  side = sides[arg[1]]
-end
-
-
-
-
--------------------- Helper functions ---------------------------
+---------------------- Helper functions ---------------------------
 
 -- Format the inventory controller labels to be more manageable
 local function labelFormat(label)
@@ -44,9 +35,10 @@ local function inventoryToGrid(slot, row_length)
 end
 
 -- Look for the first empty slot in our inventory.
-local function findEmptySlot()
+local function findEmptySlot(bulk)
+  local bulk = false or bulk 
   for slot = 1, r.inventorySize() do
-    if slot % 4 == 0 or slot > 12 then
+    if (slot % 4 == 0 and not bulk) or slot > 12 then
       if robot.count(slot) == 0 then
         return slot
       end
@@ -73,71 +65,123 @@ end
 
 -------------------- Navigational functions ---------------------
 ---- needs refining, add way to verify correct starting point and orientation
--- consider to use a movelist as in miner.lua
 
-local x, y, z, f = 0, 0, 0, 0
-local f0 = f
+-- Table to translate characters to moves.
+local action = {
+  [string.byte("F")] = function () return r.move(sides.forward) end,
+  [string.byte("R")] = function () return r.turn(true) end,
+  [string.byte("L")] = function () return r.turn(false) end,
+  [string.byte("U")] = function () return r.move(sides.up) end,
+  [string.byte("D")] = function () return r.move(sides.down) end,
+  [string.byte("B")] = function () return r.move(sides.back) end
+}
 
-local delta = {[0] = function() z = z + 1 end, [1] = function() x = x - 1 end,
-               [2] = function() z = z - 1 end, [3] = function() x = x + 1 end}
+--- table to invert moves
+local oppositeBytes = {
+ [string.byte("F")] = string.byte("B"),
+ [string.byte("R")] = string.byte("L"),
+ [string.byte("L")] = string.byte("R"),
+ [string.byte("U")] = string.byte("D"),
+ [string.byte("D")] = string.byte("U"),
+ [string.byte("B")] = string.byte("F")
+}
 
-local function turnRight()
-  robot.turnRight()
-  f = (f + 1) % 4
-end
+local moved = "" -- string to hold movements
 
-local function turnLeft()
-  robot.turnLeft()
-  f = (f - 1) % 4
-end
-
-local function turnTowards(side)
-  if f == side - 1 then
-    turnRight()
-  else
-    while f ~= side do
-      turnLeft()
-    end
+-- Reverse a given path string
+local function reversePath(path)
+  local str = string.reverse(path)
+  local new_path = "" 
+  for idx = 1, #str do
+    local byte = str:byte(idx)
+    new_path = new_path .. string.char(oppositeBytes[byte])
   end
+  return new_path
 end
 
-
-------------------- Inventory management ----------------------------
-local own_inventory = { slot = {}}
-
--- Output record of OwnInventory
-local function takeOwnInventory()
-  local inventory = { slots = {}, }
-  inventory.size = r.inventorySize()
-  for slot = 1, inventory.size do
-    local info = ic.getStackInInternalSlot(slot)
-    if info then
-      local label = labelFormat(info.label)
-      inventory.slots[slot] = {["label"] = label, ["size"] = info.size}
-    end
-  end 
-  return inventory
-end
-
--- Output record of external inventory
-local function takeInventory(side)
-  local inventory = { slots = {}}
-  inventory.size = ic.getInventorySize(side)
-  if inventory.size then
-    for slot = 1, inventory.size do
-      local info = ic.getStackInSlot(side,slot)
-      if info then
-        local label = labelFormat(info.label)
-        inventory.slots[slot] = {["label"] = label, ["size"] = info.size}
+-- Traverse a given path string
+local function goAlong(path)
+  local bytes = {}
+  for idx = 1, #path do
+    local num = path:byte(idx)
+    if not action[num]() then
+      print("path blocked")
+      local tries = 0
+      repeat
+        os.sleep(1)
+        state = action[num]()
+        tries = tries + 1
+      until state or tries > 10
+      if not state then
+        print("stopping, help me!")
+        return false
       end
     end
   end
-  return inventory
+  moved = moved .. path
+  return true
+end
+
+-- Traverse inverted movestring resetting moves.
+local function goHome()
+  local path = reversePath(moved)
+  if goAlong(path) then
+  moved = ""
+  return true
+  end
+  return false 
+end
+
+------------------- Inventory management ----------------------------
+local own = {}
+
+local inventory = {
+ [1] = {["path"] = "RF",    ["side"] = sides.forward},
+ [2] = {["path"] = "RFRF",  ["side"] = sides.left}
+ }
+ 
+-- record contents OwnInventory
+local function takeOwnInventory()
+  own.size = r.inventorySize()
+  for slot = 1, own.size do
+    local info = ic.getStackInInternalSlot(slot)
+    if info then
+      local label = labelFormat(info.label)
+      own[slot] = {["label"] = label, ["size"] = info.size}
+    end
+  end 
+  return true
+end
+
+-- record contents of external inventory
+local function takeInventory(num)
+  local side = inventory[num].side or sides.forward()
+  inventory[num].size = ic.getInventorySize(side)
+  if inventory[num].size then
+    for slot = 1, inventory[num].size do
+      local info = ic.getStackInSlot(side,slot)
+      if info then
+        local label = labelFormat(info.label)
+        inventory[num][slot] = {["label"] = label, ["size"] = info.size}
+      end
+    end
+  end
+  return true
+end
+
+-- Move to selected inventory and record its contents
+local function goTakeInventory(num)
+  goAlong(inventory[num].path)
+  takeInventory(num)
+  goHome()
 end
 
 -- Take  items from external inventory
 local function takeFromInventory(inventory_number, item, count)
--- move to inventory[inventory_number]
+  local num = inventory_number
+  goAlong(inventory[num].path)
+  
+  
 -- find itemslot or empty slot and item to take 
 -- decrement giving inventory update OwnInventory
 end
@@ -161,15 +205,12 @@ local function chestRenumber(inventory)
 end 
 
 local function setTable()
+-- verify empty grid
+-- place ingredients
 end
 
 ---------------------- Main thread --------------------------------------
+takeOwnInventory()
+goTakeInventory(1)
 
-own_inventory = takeOwnInventory()
-
-
---inventory = chestRenumber(inventory)
-for key,item in pairs(own_inventory.slots) do
-  io.write(key .." "..item.label.." "..item.size.."\n")
-end
 
