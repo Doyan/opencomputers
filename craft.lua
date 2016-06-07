@@ -38,12 +38,10 @@ end
 local function findEmptySlot(bulk)
   local bulk = false or bulk 
   for slot = 1, r.inventorySize() do
-    if (slot % 4 == 0 and not bulk) or slot > 12 then
-      if robot.count(slot) == 0 then
-        return slot
-      end
-    end  
-  end
+    if robot.count(slot) == 0 then
+      return slot
+    end
+  end  
 end
 
 -- Since robot.select() is an indirect call, we can speed things up a bit.
@@ -57,10 +55,10 @@ end
 
 -- Find the first slot with a certain label
 local function findLabeledSlot(inventory, label)
-  for k, item in pairs(inventory.slot) do
+  for k, item in ipairs(inventory) do
     if item.label==label then return k end
   end
-  return nil
+  return false
 end
 
 -------------------- Navigational functions ---------------------
@@ -140,20 +138,31 @@ local inventory = {
  [2] = {["path"] = "RFRF",  ["side"] = sides.left}
  }
  
--- record contents OwnInventory
+-- record contents OwnInventory, slot-wise and ingredient-wise
 local function takeOwnInventory()
   own.size = r.inventorySize()
   for slot = 1, own.size do
     local info = ic.getStackInInternalSlot(slot)
     if info then
       local label = labelFormat(info.label)
-      own[slot] = {["label"] = label, ["size"] = info.size}
+      own[slot] = {
+        ["slot"] = slot,
+        ["label"] = label,
+        ["size"] = info.size,
+        ["maxSize"] = info.maxSize
+      }
+      if not own[label] then
+        own[label] = {}
+        own[label].total = 0
+      end
+      table.insert(own[label],own[slot])
+      own[label].total = own[label].total + own[slot].size
     end
   end 
   return true
 end
 
--- record contents of external inventory
+-- record contents of external inventory, slot-wise and ingredient-wise
 local function takeInventory(num)
   local side = inventory[num].side or sides.forward()
   inventory[num].size = ic.getInventorySize(side)
@@ -162,7 +171,19 @@ local function takeInventory(num)
       local info = ic.getStackInSlot(side,slot)
       if info then
         local label = labelFormat(info.label)
-        inventory[num][slot] = {["label"] = label, ["size"] = info.size}
+        inventory[num][slot] = {
+          ["inventory"] = num,
+          ["slot"] = slot,
+          ["label"] = label,
+          ["size"] = info.size,
+          ["maxSize"] = info.maxSize
+        }
+        if not inventory[label] then
+          inventory[label] = {}
+          inventory[label].total = 0
+        end
+        table.insert(inventory[label],inventory[num][slot])
+        inventory[label].total = inventory[label].total + inventory[num][slot].size
       end
     end
   end
@@ -176,13 +197,17 @@ local function goTakeInventory(num)
   goHome()
 end
 
+local function organiseOwn()
+
+-- remove stuff from grid
+end
+
 -- Take  items from external inventory
 local function takeFromInventory(inventory_number, item, count)
   local num = inventory_number
   goAlong(inventory[num].path)
   
-  
--- find itemslot or empty slot and item to take 
+-- find empty slot and item to take 
 -- decrement giving inventory update OwnInventory
 end
 
@@ -209,8 +234,46 @@ local function setTable()
 -- place ingredients
 end
 
+
+-- Function for testing
+local function showInventory(num)
+  local inventory = inventory[num] or own
+  if num then
+    io.write("\n Showing inventory nr " .. num .. ": \n")
+  else
+    io.write("\n Showing own inventory: \n")
+  end
+  for slot = 1, inventory.size  do
+    if inventory[slot] then
+      io.write("\n slot " .. slot .. ": " .. inventory[slot].size .. " " .. inventory[slot].label)
+    end
+  end
+end
+
+-- Function for testing
+local function showItem(label)
+  local total = 0
+  if own[label] then
+    io.write("\n" .. own[label].total .. " ".. label .. "(s) in own inventory: \n")
+    for k,v in ipairs(own[label]) do
+      io.write("\n" .. v.size .. " in slot " .. v.slot) 
+    end
+  total = total + own[label].total  
+  end
+  if inventory[label] then
+    io.write("\n \n" .. inventory[label].total .. " " .. label .. "(s) in external inventories: \n")
+    for k,v in ipairs(inventory[label]) do
+    io.write("\n" .. v.size .. " in slot " .. v.slot .. " of inventory " .. v.inventory)
+    end
+  total = total + inventory[label].total
+  end
+  io.write("\n -------------------------------------------- \n")
+  io.write("For a total of " .. total .. " " .. label .. "(s) \n")
+end
+
 ---------------------- Main thread --------------------------------------
 takeOwnInventory()
 goTakeInventory(1)
-
+showInventory()
+showItem("furnace")
 
