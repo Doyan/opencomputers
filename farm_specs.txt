@@ -1,0 +1,5 @@
+{slots={[1] = 1, [2] = 1, [3] = 16},
+wood={row_length = 8, seed_slot = 3, rows = 4, row_gap = 2, start_x = 0, start_y = 0, check_side = 3, seed_x = 1, slot = 1, start_gap = 2},
+cactus={row_length = 7, rows = 3, row_gap = 1, start_x = 12 , start_y = 2, check_side = 0, seed_x = 13, slot = 2, start_gap = 2},
+sugarcane={row_length = 7, rows = 2, row_gap = 2, start_x = 17, start_y = 2, check_side = 0, seed_x = 18, start_gap = 2}
+}
