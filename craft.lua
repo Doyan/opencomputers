@@ -1,13 +1,14 @@
 -- Script to craft items. v.1.0
 local component = require("component")
 local computer = require("computer")
+local serialization = require("serialization")
 local shell = require("shell") 
 local robot = require("robot")
 local sides = require("sides")
 local rs = component.redstone
 local r = component.robot
 local ic = component.inventory_controller
---------------------------------------------
+--------------------------------------------)
 local arg, option = shell.parse(...)
 
 if #arg < 1 or option.h then
@@ -19,29 +20,45 @@ if #arg < 1 or option.h then
   return
 end
 
+local recipefile = "/usr/recipes.txt"
+local inventoryfile = "/usr/inventory.txt" 
+
+----------------------- Init --------------------------------------
+local own = {["path"] = ""} -- own inventory
+own.size = r.inventorySize()
+own["empty"] = {["total"] = own.size }
+local ext = {} -- external ingredient listing
+
+-- Inventories
+local inventory = {
+  [0] = own,
+  [1] = {["path"] = "RF",    ["side"] = sides.forward},
+  [2] = {["path"] = "RFU",  ["side"] = sides.forward},
+  [3] = {["path"] = "RFUU", ["side"] = sides.forward},
+  [4] = {["path"] = "L",  ["side"] = sides.forward}
+ }
+
+local moved = "" -- string to hold movements
+
 ---------------------- Helper functions ---------------------------
 
 -- Format the inventory controller labels to be more manageable
 local function labelFormat(label)
   local label = string.lower(label)
   label = string.gsub(label, "%s+", "_")
+  label = string.gsub(label, "[%(%)]", "")
+  label = string.gsub(label, "^%d", "_%0")
   return label
 end
 
--- Convert slotnumber of inventory to corresponding 3x3 slotnumber. 
-local function inventoryToGrid(slot, row_length)
-  local number = math.floor(slot / row_length) * 3 + slot % row_length
+local function gridToGrid(slot, rows_a, rows_b)
+  local number = math.floor(slot / rows_a) * rows_b + slot % rows_a
   return number 
 end
 
--- Look for the first empty slot in our inventory.
-local function findEmptySlot(bulk)
-  local bulk = false or bulk 
-  for slot = 1, r.inventorySize() do
-    if robot.count(slot) == 0 then
-      return slot
-    end
-  end  
+local function gridToInventory(number)
+  local slot = math.floor(number / 3) * 4 + number % 3
+  return slot 
 end
 
 -- Since robot.select() is an indirect call, we can speed things up a bit.
@@ -53,15 +70,35 @@ local function cachedSelect(slot)
   end
 end
 
--- Find the first slot with a certain label
-local function findLabeledSlot(inventory, label)
-  for k, item in ipairs(inventory) do
-    if item.label==label then return k end
+-- Save table, with newline at the first level of a nested structure
+local function saveTable(filename,data)
+  local file = io.open(filename, "w")
+  local first = true
+  for k,v in pairs(data) do
+    if first then
+      file:write(k .."=".. serialization.serialize(v))
+      first = false
+    else
+      file:write(",\n" .. k .."=".. serialization.serialize(v))
+    end
   end
-  return false
+  file:close()
 end
 
--------------------- Navigational functions ---------------------
+-- Read table saved according to saveTable's rules
+local function readTable(filename)
+  local file = io.open(filename)
+  local str = "{" .. file:read("*a") .. "}"
+  file:close()
+  return serialization.unserialize(str) 
+end
+
+-- Set the default value of a table
+function setDefault (t, d)
+  local mt = {__index = function () return d end}
+  setmetatable(t, mt)
+end
+------------------- Navigational functions ---------------------
 ---- needs refining, add way to verify correct starting point and orientation
 
 -- Table to translate characters to moves.
@@ -83,8 +120,6 @@ local oppositeBytes = {
  [string.byte("D")] = string.byte("U"),
  [string.byte("B")] = string.byte("F")
 }
-
-local moved = "" -- string to hold movements
 
 -- Reverse a given path string
 local function reversePath(path)
@@ -124,156 +159,418 @@ end
 local function goHome()
   local path = reversePath(moved)
   if goAlong(path) then
-  moved = ""
-  return true
+    moved = ""
+    return true
   end
   return false 
 end
 
-------------------- Inventory management ----------------------------
-local own = {}
+-- Determine if we need to move based on path and movestring
+local function needMove(path)
+  if path == moved then
+    return false
+  end
+  goHome() -- Hotfix until string comparison method is done
+  local new_path = path
+  return true, new_path
+end
 
-local inventory = {
- [1] = {["path"] = "RF",    ["side"] = sides.forward},
- [2] = {["path"] = "RFRF",  ["side"] = sides.left}
- }
- 
--- record contents OwnInventory, slot-wise and ingredient-wise
-local function takeOwnInventory()
-  own.size = r.inventorySize()
+-- Go to a specific inventory
+local function goToInventory(num)
+  local state, path = needMove(inventory[num].path)
+  if state then
+    return goAlong(path)
+  end
+  return true
+end
+
+------------------- Inventory management -------------------------------
+local nolabel_mt = {
+  __index = function () return {["total"] = 0} end,
+  }
+local noslot_mt = {
+  __index = function () return { ["slot"] = false, ["size"] = 0} end}
+set
+
+local function incrementTotal(label, amount)
+  own[label].total = 
+end
+
+local function decrementTotal(label, amount)
+  
+end
+
+local function defineSlot(num,slot,label, size)
+  if not inventory[num] then
+    io.write("\nNo inventory with that number\n")
+    return false
+  elseif num == 0 then
+    incrementTotal(true,label,size)
+    table.insert(own[label],{["slot"] = slot, ["size"] = size})
+  else
+    incrementTotal(false,label,size)
+    ext[label][num] = {[slot] = size}
+  end
+end
+
+local function isEmpty(num, slot, empty)
+  if not inventory[num] then
+    io.write("\nNo inventory with that number\n")
+    return false
+  elseif num == 0 then
+    if empty then
+      defineSlot(num,slot,"empty",1)
+    else
+      own["empty"][slot] = nil
+      decrementTotal(true,"empty",1)
+    end
+  else
+    if empty then
+      defineSlot(num,slot,"empty",1)
+    else
+      ext["empty"][slot] = nil
+      decrementTotal(false,"empty",1)
+    end
+  end
+end
+
+
+local function decrementSlot(num, slot, label, amount)
+   if not inventory[num] then
+    io.write("\nNo inventory with that number\n")
+    return false
+  elseif num == 0 then
+    own[label][slot] = own[label][slot] - amount
+    if own[label][slot] < 1 then
+      own[label][slot] = nil
+      isEmpty(num,slot,true)
+    end
+  else
+    own[label][slot] = own[label][slot] - amount
+    if ext[label][slot] < 1 then
+      ext[label][slot] = nil
+      isEmpty(num,slot,true)
+    end
+  end
+end
+
+local function listOwnInventory()
   for slot = 1, own.size do
     local info = ic.getStackInInternalSlot(slot)
     if info then
       local label = labelFormat(info.label)
-      own[slot] = {
-        ["slot"] = slot,
-        ["label"] = label,
-        ["size"] = info.size,
-        ["maxSize"] = info.maxSize
-      }
-      if not own[label] then
-        own[label] = {}
-        own[label].total = 0
+      defineSlot(0,slot,label,info.size)
+      isEmpty(0,slot,false)
+      if own[label].maxSize == 0 then
+        own[label].maxSize = info.maxSize
       end
-      table.insert(own[label],own[slot])
-      own[label].total = own[label].total + own[slot].size
+    else
+      isEmpty(0,slot,true)
     end
-  end 
+  end
   return true
 end
 
--- record contents of external inventory, slot-wise and ingredient-wise
-local function takeInventory(num)
-  local side = inventory[num].side or sides.forward()
-  inventory[num].size = ic.getInventorySize(side)
-  if inventory[num].size then
-    for slot = 1, inventory[num].size do
-      local info = ic.getStackInSlot(side,slot)
+local function listInventory(num)
+  if not inventory[num] then
+    io.write("\nNo inventory with that number\n")
+    return false
+  elseif num == 0 then
+    listOwnInventory()
+  elseif (moved == inventory[num].path) then
+    local side = inventory[num].side or sides.forward()
+    inventory[num].size = ic.getInventorySize(side)
+    for slot = 1, inventory[num].size  do
+      local info = ic.getStackInSlot(side, slot)
       if info then
         local label = labelFormat(info.label)
-        inventory[num][slot] = {
-          ["inventory"] = num,
-          ["slot"] = slot,
-          ["label"] = label,
-          ["size"] = info.size,
-          ["maxSize"] = info.maxSize
-        }
-        if not inventory[label] then
-          inventory[label] = {}
-          inventory[label].total = 0
+        defineSlot(num,slot,label,info.size)
+        isEmpty(num,slot,false)
+      else
+        isEmpty(num,slot,true)
+      end
+    end
+  else
+    io.write("\nNot at inventory " .. num .. ", aborting.\n")
+    return false
+  end
+  os.sleep(0)
+end
+
+local function findEmptyNonGrid()
+  for slot in pairs(own["empty"]) do
+    if slot > 11 or slot == 8 then
+      return slot
+    end
+  end
+  return false  
+end
+
+-- Find the first empty slot in numbered inventory.
+local function findEmptySlot(num)
+  local num = num or 0
+  if num == 0 then
+   return findEmptyNonGrid()
+  else
+    local slot = next(ext["empty"])
+    if slot and (ext["empty"].total > 2) then
+      return slot
+    end
+  end
+end
+
+local function internalTransfer(fromSlot, toSlot, amount)
+  local label = own[fromSlot]
+  local amount = amount or own[label][fromSlot]
+  print(label,fromSlot,toSlot)
+  local transferred = math.min(amount,own[label][fromSlot],own[label].maxSize - own[label][toSlot])
+  local remaining = amount - transferred
+  cachedSelect(fromSlot)
+  if r.transferTo(toSlot, amount) then
+    defineSlot(0,toSlot,label,transferred)
+    decrementSlot(0, fromSlot, label, transferred)
+    return true, remaining
+  end
+  return false, remaining
+end
+
+local function clearOwnSlot(slot)
+  local status, remaining = true, 0
+  if own["empty"][slot] == 0 then
+    status, remaining = internalTransfer(slot, findEmptyNonGrid())
+    while (remaining > 0) and status do
+      status, remaining = internalTransfer(slot, findEmptyNonGrid())
+    end
+  end
+  return status
+end
+
+local function clearGrid()
+  local slot = 0
+  while slot < 12 do
+    slot = slot + 1
+    if slot % 4 ~= 0 then
+      local info = ic.getStackInInternalSlot(slot)
+      if info then
+        if not clearOwnSlot(slot) then
+          return false
         end
-        table.insert(inventory[label],inventory[num][slot])
-        inventory[label].total = inventory[label].total + inventory[num][slot].size
       end
     end
   end
   return true
 end
 
--- Move to selected inventory and record its contents
-local function goTakeInventory(num)
-  goAlong(inventory[num].path)
-  takeInventory(num)
-  goHome()
-end
-
-local function organiseOwn()
-
--- remove stuff from grid
-end
-
--- Take  items from external inventory
-local function takeFromInventory(inventory_number, item, count)
-  local num = inventory_number
-  goAlong(inventory[num].path)
-  
--- find empty slot and item to take 
--- decrement giving inventory update OwnInventory
-end
-
--- Give items to external inventory
-local function addToInventory(inventory_number, item, count)
--- move to inventory[inventory_number]
--- find empty slot or item slot in inventory[inventory_number]
--- decrement OwnInventory update recieving inventory
-end
-
---------------------- Recipe related ------------------------------------
-
-local function chestRenumber(inventory)
-  local recipe = { slots = {}}
-  for slot, item in pairs(inventory.slots) do
-    local number = inventoryToGrid(slot,9)
-    recipe.slots[number] = item
+local function fillUpSlot(slot, label, amount)
+  if amount > own[label].maxSize then
+    io.write("amount is bigger than max size: ".. own[label].maxSize .."\n")
+    return false
   end
-  return recipe
-end 
-
-local function setTable()
--- verify empty grid
--- place ingredients
+  if own[label][slot] == amount then
+    return true
+  end
+  if own[slot] and (own[label][slot] == 0) then
+    clearOwnSlot(slot)
+  end
+  local i = 0
+  while (own[label][slot] < amount) and (i < 10) do
+    i = i + 1
+    print(label, own[label])
+    internalTransfer(own[label][#label], slot, amount - own[label][slot])
+  end
+  return own[label][slot] >= amount
 end
 
 
--- Function for testing
+local function giveToInventory(num, label, amount)
+  -- prel checks
+  -- transfer
+  -- update inventories
+  -- return remaining
+end
+
+local function takeFromInventory(num, label, amount)
+  -- prel checks
+  -- transfer
+  -- update inventories
+  -- return remaining
+end
+
+---------------------------- Crafting ---------------------------------
+local queue = {}
+local reserved = {}
+local needs = {}
+local recipes = {}
+
+setDefault(reserved, 0)
+ 
+local function requestItem(label, amount)
+  needs[label] = needs[label] or 0
+  needs[label] = needs[label] + amount
+  return true
+end
+
+local function checkOffItem(label, amount)
+  if needs[label] then
+    needs[label] = needs[label] - amount
+    if needs[label] < 1 then
+      needs[label] = nil
+    end
+  end
+  return true
+end
+
+local function reserveItem(label, amount)
+  reserved[label] = reserved[label] + amount
+  checkOffItem(label, amount)
+  return reserved[label] < own[label].total
+end
+
+local function addToQueue(label, amount)
+  queue[label] = queue[label] or 0
+  queue[label] = math.ceil(queue[label] + amount / recipes[label][1])
+  checkOffItem(label, amount)
+  return true
+end
+
+local function readRecipe(label)
+  if not recipes[label] then 
+    local rTable = readTable(recipefile)
+    if rTable[label] then
+      recipes[label] = rTable[label]
+      return true
+    end
+  end
+  return false
+end
+
+local function getCost(label, amount)
+  local cost = {}
+  if not recipes[label] then
+    if not readRecipe(label) then
+      io.write("No recipe for item " .. label .. " aborting.")
+      return false
+    end
+  end
+  local recipe = recipes[label]
+  local times = math.ceil(amount / recipe[1]) 
+  for _,v in pairs(recipe[3]) do
+    if not cost[v] then
+      cost[v] = 1 * times
+    else
+      cost[v] = cost[v] + 1 * times
+    end
+  end
+  return cost
+end
+
+local function compareCost(cost)
+  local status = true
+  for k,v in pairs(cost) do
+    if not own[k] then
+      status = false
+      requestItem(k,v)
+    elseif own[k].total - reserved[k] < v then
+      status = false
+      requestItem(k,v - own[k].total + reserved[k])
+    else
+      reserveItem(k, v)
+    end
+  end
+  return status
+end
+
+local function handleRequests()
+  local label, amount = next(needs)
+  while label do
+    local cost = getCost(label, amount)
+    if not cost then
+      return false
+    end
+    compareCost(cost)
+    addToQueue(label, amount)
+    os.sleep(0)
+    label, amount = next(needs)
+  end
+end
+
+local function orderByComplexity(recipes,item_1, item_2)
+  return recipes[item_1][2] < recipes[item_2][2]
+end
+
+local function orderQueue()
+  local labels = {}
+  for label in pairs(queue) do labels[#labels+1] = label end
+  table.sort(labels, function (a,b) return orderByComplexity(recipes, a,b) end)
+  for n,label in ipairs(labels) do
+    labels[n] = {label, queue[label], recipes[label][2]}
+  end
+  return labels
+end
+
+local function makeQueue(label, amount)
+  requestItem(label,amount)
+  handleRequests()
+  queue = orderQueue()
+end
+
+local function setTable(label, times)
+  local grid = recipes[label][3]
+  local slot = 0
+  while slot < 12 do
+   slot = slot + 1
+   local number = gridToGrid(slot, 4, 3)
+    if slot % 4 ~= 0 then
+      if not grid[number] then
+        clearOwnSlot(slot)
+      else
+        print(grid[number])
+        fillUpSlot(slot, grid[number], times)
+      end
+    end
+  end
+end
+
+local function craft(label, amount)
+  -- setTable
+  -- select output slot
+  -- craft
+  -- return remaining
+end
+
+local function doQueue()
+  setTable(queue)
+end
+------------------------------ Functions for testing ------------------
+
 local function showInventory(num)
-  local inventory = inventory[num] or own
-  if num then
-    io.write("\n Showing inventory nr " .. num .. ": \n")
-  else
+  local num = num or 0
+  if num == 0 then
     io.write("\n Showing own inventory: \n")
+  else
+    io.write("\n Showing inventory nr " .. num .. ": \n")
   end
-  for slot = 1, inventory.size  do
-    if inventory[slot] then
-      io.write("\n slot " .. slot .. ": " .. inventory[slot].size .. " " .. inventory[slot].label)
+  for slot = 1, inventory[num].size do
+    if inventory[num][slot] then
+      if not inventory[num][slot].label then
+        io.write("\nInventory is empty\n")
+      else
+        io.write("\n slot " .. slot .. ": " .. inventory[num][slot].size .. " " .. inventory[num][slot].label)
+      end
     end
   end
+  os.sleep(0)
 end
 
--- Function for testing
-local function showItem(label)
-  local total = 0
-  if own[label] then
-    io.write("\n" .. own[label].total .. " ".. label .. "(s) in own inventory: \n")
-    for k,v in ipairs(own[label]) do
-      io.write("\n" .. v.size .. " in slot " .. v.slot) 
-    end
-  total = total + own[label].total  
-  end
-  if inventory[label] then
-    io.write("\n \n" .. inventory[label].total .. " " .. label .. "(s) in external inventories: \n")
-    for k,v in ipairs(inventory[label]) do
-    io.write("\n" .. v.size .. " in slot " .. v.slot .. " of inventory " .. v.inventory)
-    end
-  total = total + inventory[label].total
-  end
-  io.write("\n -------------------------------------------- \n")
-  io.write("For a total of " .. total .. " " .. label .. "(s) \n")
-end
 
----------------------- Main thread --------------------------------------
-takeOwnInventory()
-goTakeInventory(1)
-showInventory()
-showItem("furnace")
+------------------------------------ Main loop -------------------------
+local label, amount = arg[1], tonumber(arg[2])
+listInventory(0)
+makeQueue(label,amount)
+setTable(label,amount)
+--for k,v in pairs(ext) do print(k,v.total) end
+--doQueue()
+--cachedSelect(4)
+--component.crafting.craft(1)
+
 
